@@ -21,7 +21,7 @@
 import numpy as np
 from pyscf import gto, scf, dft
 from pyscf.lib import logger
-from pyscf.scf import atom_hf, ADIIS
+from pyscf.scf import atom_hf, atom_hf_pp, ADIIS
 from pyscf.dft import rks
 from pyscf.data import elements
 from scipy.interpolate import make_interp_spline
@@ -29,33 +29,53 @@ from scipy.interpolate import make_interp_spline
 from pyscf.hirshfeld.sph_dft_elements import NRSRHFS_CONFIGURATION
 
 
-def get_atm_nrks(mol, atomic_configuration=NRSRHFS_CONFIGURATION, xc='slater', grid=(120, 770), basis="aug-cc-pVQZ"):
+def get_atm_nrks(mol, atomic_configuration=NRSRHFS_CONFIGURATION, xc='slater', grid=(120, 770), basis="aug-cc-pVQZ", pseudo=None):
     if isinstance(mol, scf.hf.SCF):
         xc = getattr(mol, "xc", "HF")
-        mol = mol.mol
+        mol_obj = mol.mol
+        if pseudo is None:
+            pseudo = getattr(mol_obj, 'pseudo', None)
+        mol = mol_obj
     elem_list = set([a[0] for a in mol._atom])
     logger.info(mol, 'Spherically averaged atomic KS for %s', elem_list)
 
     atm_scf_result = {}
     for elem in elem_list:
         elem_chrg = elements.charge(elem)
-        atm = gto.Mole(atom=elem, basis=basis, verbose=mol.verbose, spin=elem_chrg).build()
+
+        if pseudo:
+            # Build atom with pseudopotential — nelectron will be
+            # the valence count (e.g. 4 for Si with gth-pbe).
+            # GTH PPs always remove an even number of core electrons,
+            # so elem_chrg % 2 matches valence electron parity.
+            atm = gto.Mole(atom=elem, basis=basis, pseudo=pseudo,
+                           verbose=mol.verbose)
+            atm.spin = elem_chrg % 2   # parity-safe for build()
+            atm.build()
+            atm.spin = atm.nelectron   # all valence e⁻ unpaired
+            atm.a = None               # required by PP integral helpers
+        else:
+            atm = gto.Mole(atom=elem, basis=basis, verbose=mol.verbose,
+                           spin=elem_chrg).build()
 
         nao = atm.nao
         # nao == 0 for the case that no basis was assigned to an atom
         if nao == 0 or atm.nelectron == 0:  # GHOST
             raise ValueError("Ghost atom not implemented!")
+
+        if pseudo:
+            atm_ks = AtomSphAverageRKSPP(atm)
         else:
             atm_ks = AtomSphericAverageRKS(atm)
-            atm_ks.atomic_configuration = atomic_configuration
-            atm_ks.xc = xc
-            atm_ks.grids.atom_grid = grid
-            atm_ks.verbose = mol.verbose
-            my_diis_obj = ADIIS()
-            my_diis_obj.space = 12
-            atm_ks.diis = my_diis_obj
-            atm_ks.run()
-            atm_scf_result[elem] = atm_ks
+        atm_ks.atomic_configuration = atomic_configuration
+        atm_ks.xc = xc
+        atm_ks.grids.atom_grid = grid
+        atm_ks.verbose = mol.verbose
+        my_diis_obj = ADIIS()
+        my_diis_obj.space = 12
+        atm_ks.diis = my_diis_obj
+        atm_ks.run()
+        atm_scf_result[elem] = atm_ks
     return atm_scf_result
 
 
@@ -73,6 +93,22 @@ class AtomSphAverageRKS(rks.RKS, atom_hf.AtomSphericAverageRHF):
 
 
 AtomSphericAverageRKS = AtomSphAverageRKS
+
+
+class AtomSphAverageRKSPP(AtomSphAverageRKS):
+    """Spherically averaged atomic RKS with pseudopotential support."""
+    def __init__(self, mol, *args, **kwargs):
+        super().__init__(mol, *args, **kwargs)
+        # VSAP initial guess does not support pseudopotentials
+        self.init_guess = '1e'
+
+    def get_hcore(self, mol=None):
+        if mol is None:
+            mol = self.mol
+        h = mol.intor('int1e_kin', hermi=1)
+        h += atom_hf_pp.get_pp_nl(mol)
+        h += atom_hf_pp.get_pp_loc(mol)
+        return h
 
 
 def spline_radial(x, y, k=3):
