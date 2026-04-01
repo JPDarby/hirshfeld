@@ -36,7 +36,7 @@ class HirshfeldAnalysis:
         result["mf_elem"] = {}
         result["V_free_elem"] = {}
         result["spl_free_elem"] = {}
-        mf_elems = get_atm_nrks(mf, xc=self.xc, basis=mol.basis)
+        mf_elems = get_atm_nrks(mf, xc=self.xc)
         for elem in mf_elems:
             mf_elem = mf_elems[elem]
             result["mf_elem"][elem] = mf_elem
