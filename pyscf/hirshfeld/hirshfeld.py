@@ -4,7 +4,7 @@
 import numpy as np
 
 from pyscf import scf, dft, mcscf
-from pyscf.hirshfeld.sph_dft_atom_ks import get_atm_nrks, free_atom_info
+from pyscf.hirshfeld.sph_dft_atom_ks import get_atm_nrks, get_atm_nrhf_mf, free_atom_info
 
 class HirshfeldAnalysis:
     """
@@ -17,7 +17,8 @@ class HirshfeldAnalysis:
 
     result = {}
 
-    def __init__(self, mf):
+    def __init__(self, mf, atomic_scf=False):
+        self.atomic_scf = atomic_scf
         self.parse_mf(mf)
 
     def parse_mf(self, mf):
@@ -36,7 +37,10 @@ class HirshfeldAnalysis:
         result["mf_elem"] = {}
         result["V_free_elem"] = {}
         result["spl_free_elem"] = {}
-        mf_elems = get_atm_nrks(mf, xc=self.xc)
+        if self.atomic_scf:
+            mf_elems = get_atm_nrks(mf, xc=self.xc)
+        else:
+            mf_elems = get_atm_nrhf_mf(mf)
         for elem in mf_elems:
             mf_elem = mf_elems[elem]
             result["mf_elem"][elem] = mf_elem

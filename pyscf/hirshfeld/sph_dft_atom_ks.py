@@ -29,6 +29,59 @@ from scipy.interpolate import make_interp_spline
 from pyscf.hirshfeld.sph_dft_elements import NRSRHFS_CONFIGURATION
 
 
+class _AtomDensity:
+    """Lightweight mf-like wrapper for free_atom_info compatibility.
+
+    Holds an atomic Mole and a density matrix without a full SCF object.
+    """
+    def __init__(self, mol, dm):
+        self.mol = mol
+        self._dm = dm
+
+    def make_rdm1(self):
+        return self._dm
+
+
+def get_atm_nrhf_mf(mf_or_mol):
+    """Per-element free-atom densities via PySCF's built-in atomic HF.
+
+    Uses spherically-averaged Hartree-Fock with the *molecular* basis set.
+    Much faster than ``get_atm_nrks`` (which runs full KS-DFT in
+    aug-cc-pVQZ).  Handles GTH and other pseudopotentials natively
+    through ``pyscf.scf.atom_hf.get_atm_nrhf``.
+
+    Args:
+        mf_or_mol: A converged SCF object, or a Mole / Cell.
+
+    Returns:
+        dict: ``{element: _AtomDensity}`` compatible with ``free_atom_info``.
+    """
+    mol = mf_or_mol.mol if isinstance(mf_or_mol, scf.hf.SCF) else mf_or_mol
+
+    # Built-in spherically-averaged atomic HF — handles PP natively
+    atm_scf = atom_hf.get_atm_nrhf(mol)
+    # atm_scf = {elem: (e_tot, mo_energy, mo_coeff, mo_occ)}
+
+    pseudo = getattr(mol, 'pseudo', None)
+    result = {}
+
+    for elem, (e_tot, mo_energy, mo_coeff, mo_occ) in atm_scf.items():
+        # Build single-atom Mole for AO evaluation on radial grids.
+        # GTH PPs always remove an even number of core electrons,
+        # so nuclear_charge % 2 == valence_electrons % 2.
+        elem_z = elements.charge(elem)
+        atm_mol = gto.Mole(atom=f'{elem} 0 0 0', basis=mol.basis,
+                           spin=elem_z % 2, verbose=0)
+        if pseudo:
+            atm_mol.pseudo = pseudo
+        atm_mol.build()
+
+        dm = np.dot(mo_coeff * mo_occ, mo_coeff.T)
+        result[elem] = _AtomDensity(atm_mol, dm)
+
+    return result
+
+
 def get_atm_nrks(mol, atomic_configuration=NRSRHFS_CONFIGURATION, xc='slater', grid=(120, 770), basis="aug-cc-pVQZ"):
     if isinstance(mol, scf.hf.SCF):
         xc = getattr(mol, "xc", "HF")
