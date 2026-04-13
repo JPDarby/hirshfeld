@@ -79,15 +79,22 @@ class HirshfeldAnalysis:
             grids = dft.Grids(mol)
             grids.atom_grid = (77, 302)
             grids.build()
-        dm = mf.make_rdm1()
-        if isinstance(dm, tuple) or len(dm.shape) == 3:
-            dm = dm[0]+dm[1]
-        rho = ni.get_rho(mol, dm, grids)
+
+        dm_raw = mf.make_rdm1()
+
+        # Detect spin-polarized calculation
+        spin_polarized = isinstance(dm_raw, (tuple, list)) or \
+                         (hasattr(dm_raw, 'ndim') and dm_raw.ndim == 3)
+
+        if spin_polarized:
+            dm_a, dm_b = dm_raw[0], dm_raw[1]
+            dm_total = dm_a + dm_b
+            nalpha, nbeta = mol.nelec
+        else:
+            dm_total = dm_raw
+
+        rho = ni.get_rho(mol, dm_total, grids)
         Ntot = np.vdot(rho, grids.weights)
-        #print(f"integrated electrons: {Ntot}")
-        #print(f"nelectron: {mol.nelectron}")
-        #print(f"charge: {mol.charge}")
-        #print(f"nuc charge: {mol.atom_charges().sum()}")
 
         # normalize total charge
         rho *= mol.nelectron / Ntot
@@ -132,6 +139,43 @@ class HirshfeldAnalysis:
         result["V_eff"] = V_eff
         result["charge_eff"] = chrg_eff
         result["dipole_eff"] = dipole_eff
+        result["spin_polarized"] = spin_polarized
+
+        # --- Spin-resolved partitioning ---
+        if spin_polarized:
+            rho_alpha = ni.get_rho(mol, dm_a, grids)
+            rho_beta  = ni.get_rho(mol, dm_b, grids)
+
+            # Normalize each spin channel to its exact electron count  
+            Na_int = np.vdot(rho_alpha, grids.weights)
+            Nb_int = np.vdot(rho_beta,  grids.weights)
+            rho_alpha *= nalpha / Na_int
+            rho_beta  *= nbeta  / Nb_int
+
+            # Partition each spin density with the same Hirshfeld weights
+            rho_alpha_eff = rho_alpha * weights_free  # (natm, npts)
+            rho_beta_eff  = rho_beta  * weights_free
+
+            elec_alpha = (rho_alpha_eff * grids.weights).sum(axis=-1)
+            elec_beta  = (rho_beta_eff  * grids.weights).sum(axis=-1)
+            elec_alpha = np.round(elec_alpha, 7)
+            elec_beta  = np.round(elec_beta, 7)
+            
+            chrg_eff_alpha = - elec_alpha + mol.atom_charges() * 0.5
+            chrg_eff_beta = - elec_beta + mol.atom_charges() * 0.5
+
+            dipole_alpha = - (coords_atoms * rho_alpha_eff[:, :, None]
+                              * grids.weights[:, None]).sum(axis=-2)
+            dipole_beta  = - (coords_atoms * rho_beta_eff[:, :, None]
+                              * grids.weights[:, None]).sum(axis=-2)
+
+            result["charge_eff_alpha"] = chrg_eff_alpha
+            result["charge_eff_beta"]  = chrg_eff_beta
+            result["dipole_alpha"] = dipole_alpha
+            result["dipole_beta"]  = dipole_beta
+            # Atomic magnetic moment = N_alpha - N_beta per atom
+            result["magmom"] = elec_alpha - elec_beta
+
         if fn is None:
             result["custom"] = None
         else:
