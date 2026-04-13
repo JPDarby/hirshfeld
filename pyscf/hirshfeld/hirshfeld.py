@@ -74,8 +74,12 @@ class HirshfeldAnalysis:
         mf  = self.mf
         mol = self.mol
         ni  = dft.numint.NumInt()
+
+        # Always build our own standard atom-centred grids for Hirshfeld
+        # integration.  The SCF grids (mf.grids) may be a UniformGrids /
+        # multigrid object that is incompatible with NumInt.get_rho.
         grids = getattr(mf, "grids", None)
-        if grids is None:
+        if grids is None or not isinstance(grids, dft.Grids):
             grids = dft.Grids(mol)
             grids.atom_grid = (77, 302)
             grids.build()
