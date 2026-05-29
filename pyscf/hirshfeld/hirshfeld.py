@@ -79,7 +79,10 @@ class HirshfeldAnalysis:
         # integration.  The SCF grids (mf.grids) may be a UniformGrids /
         # multigrid object that is incompatible with NumInt.get_rho.
         grids = getattr(mf, "grids", None)
-        if grids is None or not isinstance(grids, dft.Grids):
+        if (grids is None or
+            not isinstance(grids, dft.Grids) or
+            grids.coords is None or
+            grids.weights is None):
             grids = dft.Grids(mol)
             grids.atom_grid = (77, 302)
             grids.build()
